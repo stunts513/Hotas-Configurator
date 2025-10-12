@@ -1,0 +1,36 @@
+# Ignore build artifacts
+build/
+*.obj
+*.exe
+*.dll
+*.pdb
+*.idb
+*.ilk
+*.log
+*.suo
+*.user
+*.ipch
+*.aps
+*.ncb
+*.opendb
+*.tlog
+*.vcxproj.user
+*.vcxproj.filters
+
+# Ignore temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# Ignore IDE-specific files
+.vscode/
+.idea/
+*.code-workspace
+
+# Ignore system files
+Thumbs.db
+.DS_Store
+
+# Ignore input.ini backups
+input.ini.bak
