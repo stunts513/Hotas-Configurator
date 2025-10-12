@@ -1,25 +1,6 @@
-# HOTAS Configurator
+# AC7 JOystick Configurator
 
-HOTAS Configurator is a tool designed to help users bind and configure their HOTAS (Hands-On Throttle and Stick) inputs for various actions in flight simulation or gaming environments.
-
-## Features
-- Bind HOTAS inputs to predefined actions.
-- Save and load configurations using `input.ini` files.
-- Dynamic UI for easy input mapping.
-- Support for DirectInput devices.
-
-## Requirements
-- Windows OS
-- Visual Studio 2022
-- DirectInput-compatible HOTAS device
-
-## Build Instructions
-1. Clone the repository:
-   ```bash
-   git clone <repository-url>
-   ```
-2. Open the project in Visual Studio.
-3. Build the solution in Debug or Release mode.
+A simple to use tool to bind your joystick or HOTAS for Ace Combat 7.
 
 ## Usage
 - Run the application.
