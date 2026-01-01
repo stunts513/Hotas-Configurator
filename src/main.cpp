@@ -59,7 +59,19 @@ const std::unordered_map<std::string, std::string> mapping_labels = {
 
 // DirectInput and Direct3D globals
 LPDIRECTINPUT8 dinput = nullptr;
-LPDIRECTINPUTDEVICE8 hotasDevice = nullptr;
+
+struct HotasDevice {
+    LPDIRECTINPUTDEVICE8 device = nullptr;
+    GUID guid;
+    std::string name;
+};
+
+std::vector<HotasDevice> hotasDevices;
+int activeDeviceIndex = 0;
+
+// bindings per device
+std::vector<std::map<std::string, std::string>> action_bindings;
+
 ID3D11Device *g_pd3dDevice = nullptr;
 ID3D11DeviceContext *g_pd3dDeviceContext = nullptr;
 IDXGISwapChain *g_pSwapChain = nullptr;
@@ -67,7 +79,6 @@ ID3D11RenderTargetView *g_mainRenderTargetView = nullptr;
 HWND g_hWnd = nullptr;
 
 // Mapping state
-std::map<std::string, std::string> action_bindings;
 int binding_index = -1;
 
 // Function prototypes
@@ -75,7 +86,7 @@ std::string DetectHotasInput(const DIJOYSTATE &js, const DIJOYSTATE &prev_js);
 void SaveBindings(const std::string &filename);
 BOOL CALLBACK EnumJoysticksCallback(const DIDEVICEINSTANCE *pdidInstance, VOID *pContext);
 void InitDirectInput(HWND hwnd);
-bool PollHotas(DIJOYSTATE &js);
+bool PollHotas(DIJOYSTATE2 &js);
 void Cleanup();
 
 // Forward declaration for ImGui Win32 backend handler
@@ -114,10 +125,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 BOOL CALLBACK EnumJoysticksCallback(const DIDEVICEINSTANCE *pdidInstance, VOID *pContext)
 {
-    HRESULT hr = dinput->CreateDevice(pdidInstance->guidInstance, &hotasDevice, nullptr);
-    if (SUCCEEDED(hr))
+    HotasDevice hd{};
+    if (SUCCEEDED(dinput->CreateDevice(pdidInstance->guidInstance, &hd.device, nullptr)))
     {
-        return DIENUM_STOP;
+        hd.guid = pdidInstance->guidInstance;
+        hd.name = pdidInstance->tszProductName;
+        hotasDevices.push_back(hd);
     }
     return DIENUM_CONTINUE;
 }
@@ -129,41 +142,54 @@ void InitDirectInput(HWND hwnd)
     if (FAILED(hr))
         return;
     hr = dinput->EnumDevices(DI8DEVCLASS_GAMECTRL, EnumJoysticksCallback, nullptr, DIEDFL_ATTACHEDONLY);
-    if (!hotasDevice)
+    if (hotasDevices.empty())
         return;
-    hr = hotasDevice->SetDataFormat(&c_dfDIJoystick);
-    if (FAILED(hr))
-        return;
-    hr = hotasDevice->SetCooperativeLevel(hwnd, DISCL_NONEXCLUSIVE | DISCL_BACKGROUND);
-    if (FAILED(hr))
-        return;
-    hr = hotasDevice->Acquire();
+
+    action_bindings.resize(hotasDevices.size());
+
+    for (auto &hd : hotasDevices)
+    {
+        hd.device->SetDataFormat(&c_dfDIJoystick2);
+        hd.device->SetCooperativeLevel(hwnd, DISCL_NONEXCLUSIVE | DISCL_BACKGROUND);
+        hd.device->Acquire();
+    }
 }
 
-bool PollHotas(DIJOYSTATE &js)
-{
-    if (!hotasDevice)
-        return false;
-    HRESULT hr = hotasDevice->Poll();
-    if (FAILED(hr))
-    {
-        hotasDevice->Acquire();
-        return false;
-    }
-    hr = hotasDevice->GetDeviceState(sizeof(DIJOYSTATE), &js);
-    if (FAILED(hr))
-        return false;
-    return true;
-}
+ bool PollHotas(DIJOYSTATE2 &js)
+ {
+     if (hotasDevices.empty())
+         return false;
+     auto &dev = hotasDevices[activeDeviceIndex].device;
+     if (!dev)
+         return false;
+     HRESULT hr = dev->Poll();
+     if (FAILED(hr))
+     {
+         hr = dev->Acquire();
+         if (FAILED(hr))
+             return false;
+         hr = dev->Poll();
+         if (FAILED(hr))
+             return false;
+     }
+     hr = dev->GetDeviceState(sizeof(DIJOYSTATE2), &js);
+     if (FAILED(hr))
+         return false;
+     return true;
+ }
 
 void Cleanup()
 {
-    if (hotasDevice)
+    for (auto &hd : hotasDevices)
     {
-        hotasDevice->Unacquire();
-        hotasDevice->Release();
-        hotasDevice = nullptr;
+        if (hd.device)
+        {
+            hd.device->Unacquire();
+            hd.device->Release();
+        }
     }
+    hotasDevices.clear();
+
     if (dinput)
     {
         dinput->Release();
@@ -192,10 +218,10 @@ void Cleanup()
 }
 
 // Detect which HOTAS input changed (button, axis, POV)
-std::string DetectHotasInput(const DIJOYSTATE &js, const DIJOYSTATE &prev_js)
+std::string DetectHotasInput(const DIJOYSTATE2 &js, const DIJOYSTATE2 &prev_js)
 {
-    // Buttons
-    for (int i = 0; i < 32; ++i)
+    // Buttons (support up to 128)
+    for (int i = 0; i < 128; ++i)
     {
         if ((js.rgbButtons[i] & 0x80) && !(prev_js.rgbButtons[i] & 0x80))
         {
@@ -206,10 +232,11 @@ std::string DetectHotasInput(const DIJOYSTATE &js, const DIJOYSTATE &prev_js)
     struct Axis
     {
         const char *name;
-        LONG DIJOYSTATE::*member;
+        LONG DIJOYSTATE2::*member;
     };
     Axis axes[] = {
-        {"X", &DIJOYSTATE::lX}, {"Y", &DIJOYSTATE::lY}, {"Z", &DIJOYSTATE::lZ}, {"Rx", &DIJOYSTATE::lRx}, {"Ry", &DIJOYSTATE::lRy}, {"Rz", &DIJOYSTATE::lRz}};
+        {"X", &DIJOYSTATE2::lX}, {"Y", &DIJOYSTATE2::lY}, {"Z", &DIJOYSTATE2::lZ},
+        {"Rx", &DIJOYSTATE2::lRx}, {"Ry", &DIJOYSTATE2::lRy}, {"Rz", &DIJOYSTATE2::lRz}};
     for (int i = 0; i < 6; ++i)
     {
         if (abs(js.*(axes[i].member) - prev_js.*(axes[i].member)) > 1000) // Reduced threshold for axis detection
@@ -222,7 +249,7 @@ std::string DetectHotasInput(const DIJOYSTATE &js, const DIJOYSTATE &prev_js)
     {
         if (abs(js.rglSlider[i] - prev_js.rglSlider[i]) > 10000)
         {
-            return std::string("Slider") + std::to_string(i + 1);
+            return "Slider" + std::to_string(i + 1);
         }
     }
     // POV hats
@@ -257,24 +284,17 @@ void SaveBindings(const std::string &filename)
     out << "HelpComment=\"         &:IfValue2!=0 / !:IfValue2==0 / +:AddValue / >:SelectLarger / <:SelectSmaller\"\n";
     out << "\n";
 
-    // Retrieve joystick information dynamically
-    DIPROPDWORD dipdw;
-    dipdw.diph.dwSize = sizeof(DIPROPDWORD);
-    dipdw.diph.dwHeaderSize = sizeof(DIPROPHEADER);
-    dipdw.diph.dwObj = 0;
-    dipdw.diph.dwHow = DIPH_DEVICE;
-    if (SUCCEEDED(hotasDevice->GetProperty(DIPROP_PRODUCTNAME, &dipdw.diph)))
+    for (size_t d = 0; d < hotasDevices.size(); ++d)
     {
-        out << "[Joystick-" << dipdw.dwData << "]\nProductName=" << dipdw.dwData << "\n";
-    }
-    else
-    {
-        out << "[Joystick-Unknown]\nProductName=Unknown\n";
-    }
+        out << "[Joystick-" << d << "]\n";
+        out << "ProductName=" << hotasDevices[d].name << "\n";
 
-    for (const auto &key : mapping_keys)
-    {
-        out << key << "=" << action_bindings[key] << "\n";
+        for (const auto &key : mapping_keys)
+        {
+            out << key << "=" << action_bindings[d][key] << "\n";
+        }
+
+        out << "\n";
     }
 }
 
@@ -347,7 +367,7 @@ int main()
         }
 
         // Poll HOTAS
-        DIJOYSTATE js = {};
+        DIJOYSTATE2 js = {};
         bool gotInput = PollHotas(js);
 
         // Start ImGui frame
@@ -355,7 +375,7 @@ int main()
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        static DIJOYSTATE prev_js = {};
+        static DIJOYSTATE2 prev_js = {};
         // Get window/client size
         RECT rect;
         GetClientRect(g_hWnd, &rect);
@@ -367,7 +387,7 @@ int main()
         ImGui::SetNextWindowSizeConstraints(ImVec2(win_size.x, total_height), ImVec2(win_size.x, total_height));
 
         ImGui::Begin("Ace Combat 7 Joystick Rebinding Tool", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
-        if (!hotasDevice)
+        if (hotasDevices.empty())
         {
             ImGui::Text("No HOTAS/game controller found.");
         }
@@ -379,6 +399,22 @@ int main()
         {
             ImGui::Text("Assign Joystick inputs to actions:");
             ImGui::Separator();
+
+            if (!hotasDevices.empty())
+            {
+                ImGui::Combo(
+                    "Active Device",
+                    &activeDeviceIndex,
+                    [](void* data, int idx, const char** out_text) {
+                        auto* devices = (std::vector<HotasDevice>*)data;
+                        *out_text = (*devices)[idx].name.c_str();
+                        return true;
+                    },
+                    &hotasDevices,
+                    (int)hotasDevices.size()
+                );
+            }
+
             // Scrollable list container for mappings
             float button_height = ImGui::GetFrameHeight() + 32.0f;
             // Adjust the height of the scrollable list to ensure the button does not overlap
@@ -398,7 +434,10 @@ int main()
                 const char *friendly_label = (label_it != mapping_labels.end()) ? label_it->second.c_str() : key.c_str();
                 ImGui::Text("%s:", friendly_label);
                 ImGui::NextColumn();
-                ImGui::Text("%s", action_bindings[key].empty() ? "(unbound)" : action_bindings[key].c_str());
+                ImGui::Text("%s",
+                    action_bindings[activeDeviceIndex][key].empty()
+                        ? "(unbound)"
+                        : action_bindings[activeDeviceIndex][key].c_str());
                 ImGui::NextColumn();
                 if (binding_index == (int)i)
                 {
@@ -406,7 +445,7 @@ int main()
                     std::string detected = DetectHotasInput(js, prev_js);
                     if (!detected.empty())
                     {
-                        action_bindings[key] = detected;
+                        action_bindings[activeDeviceIndex][key] = detected;
                         binding_index = -1;
                     }
                 }
@@ -423,7 +462,7 @@ int main()
         ImGui::Separator();
         // Place the two buttons in two columns on the same row
         ImGui::Columns(2, "##buttons_row", false);
-        if (hotasDevice && gotInput)
+        if (!hotasDevices.empty() && gotInput)
         {
             if (ImGui::Button("Save to input.ini", ImVec2(-FLT_MIN, 0)))
             {
@@ -465,7 +504,7 @@ int main()
                                     WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &str[0], size_needed, nullptr, nullptr);
                                     return str;
                                 };
-                                action_bindings[WideStringToString(key)] = WideStringToString(value);
+                                action_bindings[activeDeviceIndex][WideStringToString(key)] = WideStringToString(value);
                             }
                         }
                         in.close();
